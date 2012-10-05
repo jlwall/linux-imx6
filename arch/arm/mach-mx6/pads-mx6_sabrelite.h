@@ -290,6 +290,16 @@ static iomux_v3_cfg_t MX6NAME(sabrelite_csi0_sensor_pads)[] = {
 	0
 };
 
+static iomux_v3_cfg_t MX6NAME(sabrelite_mipi_pads)[] = {
+	MX6PAD(NANDF_CS0__GPIO_6_11),
+	MX6PAD(GPIO_6__GPIO_1_6),		/* J5 - Camera GP */
+	MX6PAD(GPIO_8__GPIO_1_8),		/* J5 - Camera Reset */
+	MX6PAD(SD1_DAT0__GPIO_1_16),		/* J5 - Camera GP */
+	MX6PAD(NANDF_D5__GPIO_2_5),		/* J16 - MIPI GP */
+	MX6PAD(NANDF_WP_B__GPIO_6_9),		/* J16 - MIPI GP */
+	0
+};
+
 static iomux_v3_cfg_t MX6NAME(sabrelite_hdmi_ddc_pads)[] = {
 	MX6PAD(KEY_COL3__HDMI_TX_DDC_SCL), /* HDMI DDC SCL */
 	MX6PAD(KEY_ROW3__HDMI_TX_DDC_SDA), /* HDMI DDC SDA */

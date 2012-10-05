@@ -397,24 +397,28 @@ static void mx6_csi0_cam_powerdown(int powerdown)
 	msleep(2);
 }
 
+static void camera_reset(int power_gp, int reset_gp)
+{
+	/* Camera power down */
+	gpio_request(power_gp, "cam-pwdn");
+	gpio_direction_output(power_gp, 1);
+	msleep(1);
+	gpio_set_value(power_gp, 0);
+
+	/* Camera reset */
+	gpio_request(reset_gp, "cam-reset");
+	gpio_direction_output(reset_gp, 1);
+
+	gpio_set_value(reset_gp, 0);
+	msleep(1);
+	gpio_set_value(reset_gp, 1);
+}
+
 static void mx6_csi0_io_init(void)
 {
 	IOMUX_SETUP(sabrelite_csi0_sensor_pads);
 
-	/* Camera power down */
-	gpio_request(MX6_SABRELITE_CSI0_PWN, "cam-pwdn");
-	gpio_direction_output(MX6_SABRELITE_CSI0_PWN, 1);
-	msleep(1);
-	gpio_set_value(MX6_SABRELITE_CSI0_PWN, 0);
-
-	/* Camera reset */
-	gpio_request(MX6_SABRELITE_CSI0_RST, "cam-reset");
-	gpio_direction_output(MX6_SABRELITE_CSI0_RST, 1);
-
-	gpio_set_value(MX6_SABRELITE_CSI0_RST, 0);
-	msleep(1);
-	gpio_set_value(MX6_SABRELITE_CSI0_RST, 1);
-
+	camera_reset(MX6_SABRELITE_CSI0_PWN, MX6_SABRELITE_CSI0_RST);
 	/* For MX6Q GPR1 bit19 and bit20 meaning:
 	 * Bit19:       0 - Enable mipi to IPU1 CSI0
 	 *                      virtual channel is fixed to 0
@@ -441,14 +445,38 @@ static struct fsl_mxc_camera_platform_data camera_data = {
 	.pwdn = mx6_csi0_cam_powerdown,
 };
 
+static void mx6_mipi_sensor_io_init(void)
+{
+	IOMUX_SETUP(sabrelite_mipi_pads);
+
+	camera_reset(MX6_SABRELITE_CSI0_PWN, IMX_GPIO_NR(6, 11));
+/*for mx6dl, mipi virtual channel 1 connect to csi 1*/
+	if (cpu_is_mx6dl())
+		mxc_iomux_set_gpr_register(13, 3, 3, 1);
+}
+
+static struct fsl_mxc_camera_platform_data ov5640_mipi_data = {
+	.mclk = 24000000,
+	.csi = 0,
+	.io_init = mx6_mipi_sensor_io_init,
+	.pwdn = mx6_csi0_cam_powerdown,
+};
+
 static struct i2c_board_info mxc_i2c1_board_info[] __initdata = {
 	{
 		I2C_BOARD_INFO("mxc_hdmi_i2c", 0x50),
 	},
+#ifdef CONFIG_MXC_CAMERA_OV5640_MIPI
+	{
+		I2C_BOARD_INFO("ov5640_mipi", 0x3c),
+		.platform_data = (void *)&ov5640_mipi_data,
+	},
+#else
 	{
 		I2C_BOARD_INFO("ov5642", 0x3c),
 		.platform_data = (void *)&camera_data,
 	},
+#endif
 };
 
 static struct tsc2007_platform_data tsc2007_info = {
