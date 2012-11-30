@@ -1566,6 +1566,7 @@ fec_restart(struct net_device *dev, int duplex)
 	fep->dirty_tx = fep->cur_tx = fep->tx_bd_base;
 	fep->cur_rx = fep->rx_bd_base;
 	fep->skb_cur = fep->skb_dirty = 0;
+	fep->tx_full = 0;
 
 	/*
 	 * Init TX buffer descriptors
