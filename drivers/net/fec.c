@@ -1456,28 +1456,6 @@ static const struct net_device_ops fec_netdev_ops = {
 #endif
 };
 
-/* Init TX buffer descriptors
- */
-static void fec_enet_txbd_init(struct net_device *dev)
-{
-	struct fec_enet_private *fep = netdev_priv(dev);
-	struct bufdesc *bdp;
-	int i;
-
-	/* ...and the same for transmit */
-	bdp = fep->tx_bd_base;
-	for (i = 0; i < TX_RING_SIZE; i++) {
-
-		/* Initialize the BD for every fragment in the page. */
-		bdp->cbd_sc = 0;
-		bdp++;
-	}
-
-	/* Set the last buffer to wrap */
-	bdp--;
-	bdp->cbd_sc |= BD_SC_WRAP;
-}
-
  /*
   * XXX:  We need to clean up on failure exits here.
   *
@@ -1534,9 +1512,6 @@ static int fec_enet_init(struct net_device *ndev)
 	bdp--;
 	bdp->cbd_sc |= BD_SC_WRAP;
 
-	/* Init transmit descriptors */
-	fec_enet_txbd_init(ndev);
-
 	fec_restart(ndev, 0);
 
 	return 0;
@@ -1549,6 +1524,7 @@ static int fec_enet_init(struct net_device *ndev)
 static void
 fec_restart(struct net_device *dev, int duplex)
 {
+	struct bufdesc *bdp;
 	struct fec_enet_private *fep = netdev_priv(dev);
 	const struct platform_device_id *id_entry =
 				platform_get_device_id(fep->pdev);
@@ -1586,20 +1562,28 @@ fec_restart(struct net_device *dev, int duplex)
 	writel(fep->bd_dma, fep->hwp + FEC_R_DES_START);
 	writel((unsigned long)fep->bd_dma + sizeof(struct bufdesc) * RX_RING_SIZE,
 			fep->hwp + FEC_X_DES_START);
-	/* Reinit transmit descriptors */
-	fec_enet_txbd_init(dev);
 
 	fep->dirty_tx = fep->cur_tx = fep->tx_bd_base;
 	fep->cur_rx = fep->rx_bd_base;
-
-	/* Reset SKB transmit buffers. */
 	fep->skb_cur = fep->skb_dirty = 0;
-	for (i = 0; i <= TX_RING_MOD_MASK; i++) {
+
+	/*
+	 * Init TX buffer descriptors
+	 * Free SKB transmit buffers
+	 */
+	bdp = fep->tx_bd_base;
+	for (i = 0; i < TX_RING_SIZE; i++) {
 		if (fep->tx_skbuff[i]) {
 			dev_kfree_skb_any(fep->tx_skbuff[i]);
 			fep->tx_skbuff[i] = NULL;
 		}
+		/* Initialize the BD for every fragment in the page. */
+		bdp->cbd_sc = 0;
+		bdp++;
 	}
+	/* Set the last buffer to wrap */
+	bdp--;
+	bdp->cbd_sc |= BD_SC_WRAP;
 
 	/* Enable MII mode */
 	if (duplex) {
