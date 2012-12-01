@@ -235,6 +235,7 @@ struct fec_enet_private {
 	struct napi_struct napi;
 	int	napi_weight;
 	bool	use_napi;
+	u32	prev_ievent;
 };
 
 #define FEC_NAPI_WEIGHT 64
@@ -246,7 +247,6 @@ struct fec_enet_private {
 
 static irqreturn_t fec_enet_interrupt(int irq, void * dev_id);
 static int fec_rx_poll(struct napi_struct *napi, int budget);
-static void fec_enet_rx(struct net_device *dev);
 static int fec_enet_close(struct net_device *dev);
 static void fec_restart(struct net_device *dev, int duplex);
 static void fec_stop(struct net_device *dev);
@@ -513,9 +513,13 @@ static void fec_timeout(struct net_device *ndev)
 
 	ndev->stats.tx_errors++;
 
+	dev_err(&ndev->dev, "%x %x, %x\n", readl(fep->hwp + FEC_IEVENT),
+			readl(fep->hwp + FEC_IMASK), fep->prev_ievent);
+
 	if (fec_enet_tx(ndev))
 		return;		/* Interrupt lost */
 
+	dev_err(&ndev->dev, "calling restart\n");
 	fec_restart(ndev, fep->full_duplex);
 	if (fep->link && !fep->tx_full)
 		netif_wake_queue(ndev);
@@ -665,8 +669,7 @@ rx_processing_done:
  * not been given to the system, we just set the empty indicator,
  * effectively tossing the packet.
  */
-static void
-fec_enet_rx(struct net_device *ndev)
+static int fec_enet_rx(struct net_device *ndev)
 {
 	struct fec_enet_private *fep = netdev_priv(ndev);
 	struct  fec_ptp_private *fpp = fep->ptp_priv;
@@ -677,6 +680,7 @@ fec_enet_rx(struct net_device *ndev)
 	struct	sk_buff	*skb;
 	ushort	pkt_len;
 	__u8 *data;
+	int packet_cnt = 0;
 
 #ifdef CONFIG_M532x
 	flush_cache_all();
@@ -688,15 +692,15 @@ fec_enet_rx(struct net_device *ndev)
 	bdp = fep->cur_rx;
 
 	while (!((status = bdp->cbd_sc) & BD_ENET_RX_EMPTY)) {
+		if (!fep->opened)
+			break;
+		packet_cnt++;
 
 		/* Since we have allocated space to hold a complete frame,
 		 * the last indicator should be set.
 		 */
 		if ((status & BD_ENET_RX_LAST) == 0)
 			printk("FEC ENET: rcv is not +last\n");
-
-		if (!fep->opened)
-			goto rx_processing_done;
 
 		/* Check for errors. */
 		if (status & (BD_ENET_RX_LG | BD_ENET_RX_SH | BD_ENET_RX_NO |
@@ -786,6 +790,25 @@ rx_processing_done:
 		writel(0, fep->hwp + FEC_R_DES_ACTIVE);
 	}
 	fep->cur_rx = bdp;
+	return packet_cnt;
+}
+
+static void check_for_rxf(struct fec_enet_private *fep, struct net_device *ndev,
+        u32 int_events)
+{
+	u32 ievents;
+
+	if (int_events & FEC_ENET_RXF)
+		return;
+	ievents = readl(fep->hwp + FEC_IEVENT);
+	if (ievents & FEC_ENET_RXF)
+		return;
+	udelay(1);
+	ievents = readl(fep->hwp + FEC_IEVENT);
+	if (ievents & FEC_ENET_RXF)
+		return;
+	dev_err(&ndev->dev, "missed rxf %x %x %x\n", fep->prev_ievent,
+			int_events, ievents);
 }
 
 static irqreturn_t
@@ -794,29 +817,39 @@ fec_enet_interrupt(int irq, void *dev_id)
 	struct net_device *ndev = dev_id;
 	struct fec_enet_private *fep = netdev_priv(ndev);
 	struct fec_ptp_private *fpp = fep->ptp_priv;
-	uint int_events;
+	u32 int_events;
 	ulong flags;
 	irqreturn_t ret = IRQ_NONE;
 
-	do {
+	for (;;) {
 		int_events = readl(fep->hwp + FEC_IEVENT);
+		if (!int_events)
+			break;
 		writel(int_events, fep->hwp + FEC_IEVENT);
 
-		if (int_events & FEC_ENET_RXF) {
-			ret = IRQ_HANDLED;
-			spin_lock_irqsave(&fep->hw_lock, flags);
+		if (fep->use_napi) {
+			if (int_events & FEC_ENET_RXF) {
+				ret = IRQ_HANDLED;
+				spin_lock_irqsave(&fep->hw_lock, flags);
 
-			if (fep->use_napi) {
 				/* Disable the RX interrupt */
 				if (napi_schedule_prep(&fep->napi)) {
 					fec_rx_int_is_enabled(ndev, false);
 					__napi_schedule(&fep->napi);
 				}
-			} else
-				fec_enet_rx(ndev);
-
+				spin_unlock_irqrestore(&fep->hw_lock, flags);
+			}
+		} else {
+			spin_lock_irqsave(&fep->hw_lock, flags);
+			if (fec_enet_rx(ndev)) {
+				ret = IRQ_HANDLED;
+				check_for_rxf(fep, ndev, int_events);
+			} else if (int_events & FEC_ENET_RXF) {
+				ret = IRQ_HANDLED;
+			}
 			spin_unlock_irqrestore(&fep->hw_lock, flags);
 		}
+		fep->prev_ievent = int_events;
 
 		/* Transmit OK, or non-fatal error. Update the buffer
 		 * descriptors. FEC handles all errors, we just discover
@@ -837,7 +870,7 @@ fec_enet_interrupt(int irq, void *dev_id)
 			ret = IRQ_HANDLED;
 			complete(&fep->mdio_done);
 		}
-	} while (int_events);
+	}
 
 	return ret;
 }
