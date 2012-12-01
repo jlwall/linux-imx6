@@ -1464,8 +1464,6 @@ static int fec_enet_init(struct net_device *ndev)
 {
 	struct fec_enet_private *fep = netdev_priv(ndev);
 	struct bufdesc *cbd_base;
-	struct bufdesc *bdp;
-	int i;
 
 	/* Allocate memory for buffer descriptors. */
 	cbd_base = dma_alloc_coherent(NULL, BUFDES_SIZE, &fep->bd_dma,
@@ -1497,20 +1495,6 @@ static int fec_enet_init(struct net_device *ndev)
 		fec_rx_int_is_enabled(ndev, false);
 		netif_napi_add(ndev, &fep->napi, fec_rx_poll, fep->napi_weight);
 	}
-
-	/* Initialize the receive buffer descriptors. */
-	bdp = fep->rx_bd_base;
-	for (i = 0; i < RX_RING_SIZE; i++) {
-
-		/* Initialize the BD for every fragment in the page. */
-		bdp->cbd_sc = 0;
-		bdp->cbd_bufaddr = 0;
-		bdp++;
-	}
-
-	/* Set the last buffer to wrap */
-	bdp--;
-	bdp->cbd_sc |= BD_SC_WRAP;
 
 	fec_restart(ndev, 0);
 
@@ -1557,6 +1541,30 @@ fec_restart(struct net_device *dev, int duplex)
 
 	/* Set maximum receive buffer size. */
 	writel(PKT_MAXBLR_SIZE, fep->hwp + FEC_R_BUFF_SIZE);
+
+	/* Initialize the receive buffer descriptors. */
+	bdp = fep->rx_bd_base;
+	for (i = 0; i < RX_RING_SIZE; i++) {
+		struct sk_buff *skb = fep->rx_skbuff[i];
+
+		if (skb) {
+			bdp->cbd_bufaddr = dma_map_single(&fep->pdev->dev,
+				skb->data, FEC_ENET_RX_FRSIZE, DMA_FROM_DEVICE);
+			bdp->cbd_sc = BD_ENET_RX_EMPTY;
+		} else {
+			bdp->cbd_bufaddr = 0;
+			bdp->cbd_sc = 0;
+		}
+#ifdef CONFIG_ENHANCED_BD
+		bdp->cbd_esc = BD_ENET_RX_INT;
+		bdp->cbd_prot = 0;
+		bdp->cbd_bdu = 0;
+#endif
+		bdp++;
+	}
+	/* Set the last buffer to wrap */
+	bdp--;
+	bdp->cbd_sc |= BD_SC_WRAP;
 
 	/* Set receive and transmit descriptor base. */
 	writel(fep->bd_dma, fep->hwp + FEC_R_DES_START);
