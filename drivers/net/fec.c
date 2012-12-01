@@ -206,7 +206,7 @@ struct fec_enet_private {
 	struct bufdesc	*rx_bd_base;
 	struct bufdesc	*tx_bd_base;
 	/* The next free ring entry */
-	struct bufdesc	*cur_rx;
+	uint	cur_rx;
 
 	uint	tx_full;
 	/* hold while accessing the HW like ringbuffer for tx/rx but not MAC */
@@ -532,6 +532,7 @@ static int fec_enet_rx(struct net_device *ndev)
 	struct	sk_buff	*skb;
 	ushort	pkt_len;
 	__u8 *data;
+	uint cur_rx;
 	int packet_cnt = 0;
 
 #ifdef CONFIG_FEC_NAPI
@@ -545,7 +546,8 @@ static int fec_enet_rx(struct net_device *ndev)
 	/* First, grab all of the stats for the incoming packet.
 	 * These get messed up if we get called due to a busy condition.
 	 */
-	bdp = fep->cur_rx;
+	cur_rx = fep->cur_rx;
+	bdp = fep->rx_bd_base + cur_rx;
 
 	while (!((status = bdp->cbd_sc) & BD_ENET_RX_EMPTY)) {
 		if (!fep->opened)
@@ -642,17 +644,20 @@ rx_processing_done:
 #endif
 
 		/* Update BD pointer to next entry */
-		if (status & BD_ENET_RX_WRAP)
+		if (status & BD_ENET_RX_WRAP) {
 			bdp = fep->rx_bd_base;
-		else
+			cur_rx = 0;
+		} else {
 			bdp++;
+			cur_rx++;
+		}
 		/* Doing this here will keep the FEC running while we process
 		 * incoming frames.  On a heavily loaded network, we should be
 		 * able to keep up at the expense of system resources.
 		 */
 		writel(0, fep->hwp + FEC_R_DES_ACTIVE);
 	}
-	fep->cur_rx = bdp;
+	fep->cur_rx = cur_rx;
 #ifdef CONFIG_FEC_NAPI
 	if (packet_cnt < budget) {
 		napi_complete(napi);
@@ -1482,7 +1487,7 @@ fec_restart(struct net_device *dev, int duplex)
 	writel((unsigned long)fep->bd_dma + sizeof(struct bufdesc) * RX_RING_SIZE,
 			fep->hwp + FEC_X_DES_START);
 
-	fep->cur_rx = fep->rx_bd_base;
+	fep->cur_rx = 0;
 	fep->tx_insert = fep->tx_remove = 0;
 	fep->tx_full = 0;
 
