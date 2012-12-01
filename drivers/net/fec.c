@@ -433,10 +433,11 @@ fec_enet_tx(struct net_device *ndev)
 	struct bufdesc *bdp;
 	unsigned short status;
 	struct	sk_buff	*skb;
+	unsigned long flags;
 
 	fep = netdev_priv(ndev);
 	fpp = fep->ptp_priv;
-	spin_lock(&fep->hw_lock);
+	spin_lock_irqsave(&fep->hw_lock, flags);
 	bdp = fep->dirty_tx;
 
 	while (((status = bdp->cbd_sc) & BD_ENET_TX_READY) == 0) {
@@ -511,7 +512,7 @@ fec_enet_tx(struct net_device *ndev)
 		}
 	}
 	fep->dirty_tx = bdp;
-	spin_unlock(&fep->hw_lock);
+	spin_unlock_irqrestore(&fep->hw_lock, flags);
 }
 
 /*NAPI polling Receive packets */
