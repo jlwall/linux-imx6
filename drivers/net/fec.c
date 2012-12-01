@@ -179,9 +179,9 @@ MODULE_PARM_DESC(macaddr, "FEC Ethernet MAC address");
 
 /* The FEC buffer descriptors track the ring buffers.  The rx_bd_base and
  * tx_bd_base always point to the base of the buffer descriptors.  The
- * cur_rx and cur_tx point to the currently available buffer.
- * The dirty_tx tracks the current buffer that is being sent by the
- * controller.  The cur_tx and dirty_tx are equal under both completely
+ * cur_rx and tx_insert point to the currently available buffer.
+ * The tx_remove tracks the current buffer that is being sent by the
+ * controller.  The tx_insert and tx_remove are equal under both completely
  * empty and completely full conditions.  The empty/ready indicator in
  * the buffer descriptor determines the actual condition.
  */
@@ -197,8 +197,8 @@ struct fec_enet_private {
 	unsigned char *tx_bounce[TX_RING_SIZE];
 	struct	sk_buff* tx_skbuff[TX_RING_SIZE];
 	struct	sk_buff* rx_skbuff[RX_RING_SIZE];
-	ushort	skb_cur;
-	ushort	skb_dirty;
+	ushort	tx_insert;
+	ushort	tx_remove;
 
 	/* CPM dual port RAM relative addresses */
 	dma_addr_t	bd_dma;
@@ -206,9 +206,7 @@ struct fec_enet_private {
 	struct bufdesc	*rx_bd_base;
 	struct bufdesc	*tx_bd_base;
 	/* The next free ring entry */
-	struct bufdesc	*cur_rx, *cur_tx;
-	/* The ring entries to be free()ed */
-	struct bufdesc	*dirty_tx;
+	struct bufdesc	*cur_rx;
 
 	uint	tx_full;
 	/* hold while accessing the HW like ringbuffer for tx/rx but not MAC */
@@ -289,7 +287,7 @@ fec_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	}
 
 	/* Fill in a Tx ring entry */
-	bdp = fep->cur_tx;
+	bdp = fep->tx_bd_base + fep->tx_insert;
 
 	status = bdp->cbd_sc;
 
@@ -316,9 +314,8 @@ fec_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	 * and get it aligned. Ugh.
 	 */
 	if (((unsigned long) bufaddr) & FEC_ALIGNMENT) {
-		unsigned int index;
-		index = bdp - fep->tx_bd_base;
-		bufaddr = PTR_ALIGN(fep->tx_bounce[index], FEC_ALIGNMENT + 1);
+		bufaddr = PTR_ALIGN(fep->tx_bounce[fep->tx_insert],
+				FEC_ALIGNMENT + 1);
 		memcpy(bufaddr, (void *)skb->data, skb->len);
 	}
 
@@ -342,10 +339,10 @@ fec_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 		swap_buffer(bufaddr, skb->len);
 
 	/* Save skb pointer */
-	fep->tx_skbuff[fep->skb_cur] = skb;
+	fep->tx_skbuff[fep->tx_insert] = skb;
 
 	ndev->stats.tx_bytes += skb->len;
-	fep->skb_cur = (fep->skb_cur+1) & TX_RING_MOD_MASK;
+	fep->tx_insert = (fep->tx_insert+1) & TX_RING_MOD_MASK;
 
 	/* Push the data cache so the CPM does not get stale memory
 	 * data.
@@ -363,18 +360,10 @@ fec_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	/* Trigger transmission start */
 	writel(0, fep->hwp + FEC_X_DES_ACTIVE);
 
-	/* If this was the last BD in the ring, start at the beginning again. */
-	if (status & BD_ENET_TX_WRAP)
-		bdp = fep->tx_bd_base;
-	else
-		bdp++;
-
-	if (bdp == fep->dirty_tx) {
+	if (fep->tx_insert == fep->tx_remove) {
 		fep->tx_full = 1;
 		netif_stop_queue(ndev);
 	}
-
-	fep->cur_tx = bdp;
 
 	spin_unlock_irqrestore(&fep->hw_lock, flags);
 
@@ -419,10 +408,10 @@ static int fec_enet_tx(struct net_device *ndev)
 	fep = netdev_priv(ndev);
 	fpp = fep->ptp_priv;
 	spin_lock_irqsave(&fep->hw_lock, flags);
-	bdp = fep->dirty_tx;
+	bdp = fep->tx_bd_base + fep->tx_remove;
 
 	while (((status = bdp->cbd_sc) & BD_ENET_TX_READY) == 0) {
-		if (bdp == fep->cur_tx && fep->tx_full == 0)
+		if ((fep->tx_remove == fep->tx_insert) && (fep->tx_full == 0))
 			break;
 		packet_cnt++;
 
@@ -431,7 +420,7 @@ static int fec_enet_tx(struct net_device *ndev)
 				FEC_ENET_TX_FRSIZE, DMA_TO_DEVICE);
 		bdp->cbd_bufaddr = 0;
 
-		skb = fep->tx_skbuff[fep->skb_dirty];
+		skb = fep->tx_skbuff[fep->tx_remove];
 		if (!skb)
 			break;
 		/* Check for errors. */
@@ -476,8 +465,8 @@ static int fec_enet_tx(struct net_device *ndev)
 
 		/* Free the sk buffer associated with this last transmit */
 		dev_kfree_skb_any(skb);
-		fep->tx_skbuff[fep->skb_dirty] = NULL;
-		fep->skb_dirty = (fep->skb_dirty + 1) & TX_RING_MOD_MASK;
+		fep->tx_skbuff[fep->tx_remove] = NULL;
+		fep->tx_remove = (fep->tx_remove + 1) & TX_RING_MOD_MASK;
 
 		/* Update pointer to next buffer descriptor to be transmitted */
 		if (status & BD_ENET_TX_WRAP)
@@ -496,7 +485,6 @@ static int fec_enet_tx(struct net_device *ndev)
 				netif_wake_queue(ndev);
 		}
 	}
-	fep->dirty_tx = bdp;
 	spin_unlock_irqrestore(&fep->hw_lock, flags);
 	return packet_cnt;
 }
@@ -1494,9 +1482,8 @@ fec_restart(struct net_device *dev, int duplex)
 	writel((unsigned long)fep->bd_dma + sizeof(struct bufdesc) * RX_RING_SIZE,
 			fep->hwp + FEC_X_DES_START);
 
-	fep->dirty_tx = fep->cur_tx = fep->tx_bd_base;
 	fep->cur_rx = fep->rx_bd_base;
-	fep->skb_cur = fep->skb_dirty = 0;
+	fep->tx_insert = fep->tx_remove = 0;
 	fep->tx_full = 0;
 
 	/*
