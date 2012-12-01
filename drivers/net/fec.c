@@ -245,7 +245,6 @@ struct fec_enet_private {
 #endif
 
 static irqreturn_t fec_enet_interrupt(int irq, void * dev_id);
-static void fec_enet_tx(struct net_device *dev);
 static int fec_rx_poll(struct napi_struct *napi, int budget);
 static void fec_enet_rx(struct net_device *dev);
 static int fec_enet_close(struct net_device *dev);
@@ -391,18 +390,6 @@ fec_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 }
 
 static void
-fec_timeout(struct net_device *ndev)
-{
-	struct fec_enet_private *fep = netdev_priv(ndev);
-
-	ndev->stats.tx_errors++;
-
-	fec_restart(ndev, fep->full_duplex);
-	if (fep->link && !fep->tx_full)
-		netif_wake_queue(ndev);
-}
-
-static void
 fec_rx_int_is_enabled(struct net_device *ndev, bool enabled)
 {
 	struct fec_enet_private *fep = netdev_priv(ndev);
@@ -425,8 +412,7 @@ static void fec_enet_netpoll(struct net_device *ndev)
 }
 #endif
 
-static void
-fec_enet_tx(struct net_device *ndev)
+static int fec_enet_tx(struct net_device *ndev)
 {
 	struct	fec_enet_private *fep;
 	struct  fec_ptp_private *fpp;
@@ -434,6 +420,7 @@ fec_enet_tx(struct net_device *ndev)
 	unsigned short status;
 	struct	sk_buff	*skb;
 	unsigned long flags;
+	int packet_cnt = 0;
 
 	fep = netdev_priv(ndev);
 	fpp = fep->ptp_priv;
@@ -443,6 +430,7 @@ fec_enet_tx(struct net_device *ndev)
 	while (((status = bdp->cbd_sc) & BD_ENET_TX_READY) == 0) {
 		if (bdp == fep->cur_tx && fep->tx_full == 0)
 			break;
+		packet_cnt++;
 
 		if (bdp->cbd_bufaddr)
 			dma_unmap_single(&fep->pdev->dev, bdp->cbd_bufaddr,
@@ -503,7 +491,10 @@ fec_enet_tx(struct net_device *ndev)
 		else
 			bdp++;
 
-		/* Since we have freed up a buffer, the ring is no longer full
+	}
+	if (packet_cnt) {
+		/*
+		 * Since we have freed up a buffer, the ring is no longer full
 		 */
 		if (fep->tx_full) {
 			fep->tx_full = 0;
@@ -513,6 +504,21 @@ fec_enet_tx(struct net_device *ndev)
 	}
 	fep->dirty_tx = bdp;
 	spin_unlock_irqrestore(&fep->hw_lock, flags);
+	return packet_cnt;
+}
+
+static void fec_timeout(struct net_device *ndev)
+{
+	struct fec_enet_private *fep = netdev_priv(ndev);
+
+	ndev->stats.tx_errors++;
+
+	if (fec_enet_tx(ndev))
+		return;		/* Interrupt lost */
+
+	fec_restart(ndev, fep->full_duplex);
+	if (fep->link && !fep->tx_full)
+		netif_wake_queue(ndev);
 }
 
 /*NAPI polling Receive packets */
