@@ -232,21 +232,13 @@ struct fec_enet_private {
 	struct  fec_ptp_private *ptp_priv;
 	uint    ptimer_present;
 
+#ifdef CONFIG_FEC_NAPI
 	struct napi_struct napi;
-	int	napi_weight;
-	bool	use_napi;
+#endif
 	u32	prev_ievent;
 };
 
-#define FEC_NAPI_WEIGHT 64
-#ifdef CONFIG_FEC_NAPI
-#define FEC_NAPI_ENABLE TRUE
-#else
-#define FEC_NAPI_ENABLE FALSE
-#endif
-
 static irqreturn_t fec_enet_interrupt(int irq, void * dev_id);
-static int fec_rx_poll(struct napi_struct *napi, int budget);
 static int fec_enet_close(struct net_device *dev);
 static void fec_restart(struct net_device *dev, int duplex);
 static void fec_stop(struct net_device *dev);
@@ -389,6 +381,7 @@ fec_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	return NETDEV_TX_OK;
 }
 
+#ifdef CONFIG_FEC_NAPI
 static void
 fec_rx_int_is_enabled(struct net_device *ndev, bool enabled)
 {
@@ -402,6 +395,7 @@ fec_rx_int_is_enabled(struct net_device *ndev, bool enabled)
 		int_events &= ~FEC_ENET_RXF;
 	writel(int_events, fep->hwp + FEC_IMASK);
 }
+#endif
 
 #ifdef CONFIG_NET_POLL_CONTROLLER
 static void fec_enet_netpoll(struct net_device *ndev)
@@ -525,6 +519,7 @@ static void fec_timeout(struct net_device *ndev)
 		netif_wake_queue(ndev);
 }
 
+#ifdef CONFIG_FEC_NAPI
 /*NAPI polling Receive packets */
 static int fec_rx_poll(struct napi_struct *napi, int budget)
 {
@@ -541,8 +536,7 @@ static int fec_rx_poll(struct napi_struct *napi, int budget)
 	ushort	pkt_len;
 	__u8 *data;
 
-	if (fep->use_napi)
-		WARN_ON(!budget);
+	WARN_ON(!budget);
 
 #ifdef CONFIG_M532x
 	flush_cache_all();
@@ -663,6 +657,7 @@ rx_processing_done:
 
 	return pkt_received;
 }
+#endif
 
 /* During a receive, the cur_rx points to the current incoming buffer.
  * When we update through the ring, if the next incoming buffer has
@@ -793,6 +788,7 @@ rx_processing_done:
 	return packet_cnt;
 }
 
+#ifndef CONFIG_FEC_NAPI
 static void check_for_rxf(struct fec_enet_private *fep, struct net_device *ndev,
         u32 int_events)
 {
@@ -810,6 +806,7 @@ static void check_for_rxf(struct fec_enet_private *fep, struct net_device *ndev,
 	dev_err(&ndev->dev, "missed rxf %x %x %x\n", fep->prev_ievent,
 			int_events, ievents);
 }
+#endif
 
 static irqreturn_t
 fec_enet_interrupt(int irq, void *dev_id)
@@ -827,28 +824,28 @@ fec_enet_interrupt(int irq, void *dev_id)
 			break;
 		writel(int_events, fep->hwp + FEC_IEVENT);
 
-		if (fep->use_napi) {
-			if (int_events & FEC_ENET_RXF) {
-				ret = IRQ_HANDLED;
-				spin_lock_irqsave(&fep->hw_lock, flags);
-
-				/* Disable the RX interrupt */
-				if (napi_schedule_prep(&fep->napi)) {
-					fec_rx_int_is_enabled(ndev, false);
-					__napi_schedule(&fep->napi);
-				}
-				spin_unlock_irqrestore(&fep->hw_lock, flags);
-			}
-		} else {
+#ifdef CONFIG_FEC_NAPI
+		if (int_events & FEC_ENET_RXF) {
+			ret = IRQ_HANDLED;
 			spin_lock_irqsave(&fep->hw_lock, flags);
-			if (fec_enet_rx(ndev)) {
-				ret = IRQ_HANDLED;
-				check_for_rxf(fep, ndev, int_events);
-			} else if (int_events & FEC_ENET_RXF) {
-				ret = IRQ_HANDLED;
+
+			/* Disable the RX interrupt */
+			if (napi_schedule_prep(&fep->napi)) {
+				fec_rx_int_is_enabled(ndev, false);
+				__napi_schedule(&fep->napi);
 			}
 			spin_unlock_irqrestore(&fep->hw_lock, flags);
 		}
+#else
+		spin_lock_irqsave(&fep->hw_lock, flags);
+		if (fec_enet_rx(ndev)) {
+			ret = IRQ_HANDLED;
+			check_for_rxf(fep, ndev, int_events);
+		} else if (int_events & FEC_ENET_RXF) {
+			ret = IRQ_HANDLED;
+		}
+		spin_unlock_irqrestore(&fep->hw_lock, flags);
+#endif
 		fep->prev_ievent = int_events;
 
 		/* Transmit OK, or non-fatal error. Update the buffer
@@ -1326,8 +1323,9 @@ fec_enet_open(struct net_device *ndev)
 	struct fec_platform_data *pdata = fep->pdev->dev.platform_data;
 	int ret;
 
-	if (fep->use_napi)
-		napi_enable(&fep->napi);
+#ifdef CONFIG_FEC_NAPI
+	napi_enable(&fep->napi);
+#endif
 
 	/* I should reset the ring buffers here, but I don't yet know
 	 * a simple way to do that.
@@ -1364,8 +1362,9 @@ fec_enet_close(struct net_device *ndev)
 	fep->opened = 0;
 	netif_stop_queue(ndev);
 	netif_carrier_off(ndev);
-	if (fep->use_napi)
-		napi_disable(&fep->napi);
+#ifdef CONFIG_FEC_NAPI
+	napi_disable(&fep->napi);
+#endif
 
 	fec_stop(ndev);
 
@@ -1529,12 +1528,10 @@ static int fec_enet_init(struct net_device *ndev)
 	ndev->netdev_ops = &fec_netdev_ops;
 	ndev->ethtool_ops = &fec_enet_ethtool_ops;
 
-	fep->use_napi = FEC_NAPI_ENABLE;
-	fep->napi_weight = FEC_NAPI_WEIGHT;
-	if (fep->use_napi) {
-		fec_rx_int_is_enabled(ndev, false);
-		netif_napi_add(ndev, &fep->napi, fec_rx_poll, fep->napi_weight);
-	}
+#ifdef CONFIG_FEC_NAPI
+	fec_rx_int_is_enabled(ndev, false);
+	netif_napi_add(ndev, &fep->napi, fec_rx_poll, 64);
+#endif
 
 	fec_restart(ndev, 0);
 
