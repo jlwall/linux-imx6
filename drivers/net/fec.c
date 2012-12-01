@@ -631,25 +631,22 @@ static int fec_enet_rx(struct net_device *ndev)
 		bdp->cbd_bufaddr = dma_map_single(&fep->pdev->dev, data,
 				FEC_ENET_RX_FRSIZE, DMA_FROM_DEVICE);
 rx_processing_done:
-		/* Clear the status flags for this buffer */
-		status &= ~BD_ENET_RX_STATS;
-
-		/* Mark the buffer empty */
-		status |= BD_ENET_RX_EMPTY;
-		bdp->cbd_sc = status;
 #ifdef CONFIG_ENHANCED_BD
 		bdp->cbd_esc = BD_ENET_RX_INT;
 		bdp->cbd_prot = 0;
 		bdp->cbd_bdu = 0;
 #endif
 
+		mb();
 		/* Update BD pointer to next entry */
-		if (status & BD_ENET_RX_WRAP) {
-			bdp = fep->rx_bd_base;
+		if (unlikely(cur_rx >= (RX_RING_SIZE - 1))) {
 			cur_rx = 0;
+			bdp->cbd_sc = BD_ENET_RX_EMPTY | BD_ENET_RX_WRAP;
+			bdp = fep->rx_bd_base;
 		} else {
-			bdp++;
 			cur_rx++;
+			bdp->cbd_sc = BD_ENET_RX_EMPTY;
+			bdp++;
 		}
 		/* Doing this here will keep the FEC running while we process
 		 * incoming frames.  On a heavily loaded network, we should be
