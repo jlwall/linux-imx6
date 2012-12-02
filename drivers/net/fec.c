@@ -775,6 +775,15 @@ fec_enet_interrupt(int irq, void *dev_id)
 			break;
 		writel(int_events, fep->hwp + FEC_IEVENT);
 
+		if (int_events & FEC_ENET_MII) {
+			ret = IRQ_HANDLED;
+			complete(&fep->mdio_done);
+			/*
+			 * For mx6, when mii interrupts are posted, other
+			 * interrupts appear to be cleared.
+			 */
+			int_events |= FEC_ENET_RXF | FEC_ENET_TXF;
+		}
 #ifdef CONFIG_FEC_NAPI
 		if (int_events & FEC_ENET_RXF) {
 			ret = IRQ_HANDLED;
@@ -812,11 +821,6 @@ fec_enet_interrupt(int irq, void *dev_id)
 			ret = IRQ_HANDLED;
 			if (fep->ptimer_present && fpp)
 				fpp->prtc++;
-		}
-
-		if (int_events & FEC_ENET_MII) {
-			ret = IRQ_HANDLED;
-			complete(&fep->mdio_done);
 		}
 
 		if (int_events & FEC_ENET_EBERR) {
