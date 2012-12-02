@@ -115,6 +115,7 @@ MODULE_PARM_DESC(macaddr, "FEC Ethernet MAC address");
 #define FEC_ENET_RX_FRSIZE	1536
 #define RX_RING_SIZE		384
 #define FEC_ENET_TX_FRSIZE	1536
+#define FEC_ENET_TX_SPACE	ALIGN(FEC_ENET_TX_FRSIZE + 2, 64)
 #define TX_RING_SIZE		128
 
 #define BUFDES_SIZE ((RX_RING_SIZE + TX_RING_SIZE) * sizeof(struct bufdesc))
@@ -186,7 +187,8 @@ struct fec_enet_private {
 	struct clk *clk;
 
 	/* The saved address of a sent-in-place packet/buffer, for skfree(). */
-	unsigned char *tx_bounce[TX_RING_SIZE];
+	unsigned char *tx_bounce;
+	unsigned char *tx_aligned_bounce;
 	struct	sk_buff* tx_skbuff[TX_RING_SIZE];
 	struct	sk_buff* rx_skbuff[RX_RING_SIZE];
 	ushort	tx_insert;
@@ -299,8 +301,8 @@ fec_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	 * and get it aligned. Ugh.
 	 */
 	if (((unsigned long) bufaddr) & (FEC_TX_ALIGNMENT - 1)) {
-		bufaddr = PTR_ALIGN(fep->tx_bounce[fep->tx_insert],
-				FEC_TX_ALIGNMENT);
+		bufaddr = fep->tx_aligned_bounce + (fep->tx_insert
+				* FEC_ENET_TX_SPACE);
 		memcpy(bufaddr, (void *)skb->data, skb->len);
 	}
 
@@ -1125,8 +1127,7 @@ static void fec_enet_free_buffers(struct net_device *ndev)
 	}
 
 	bdp = fep->tx_bd_base;
-	for (i = 0; i < TX_RING_SIZE; i++)
-		kfree(fep->tx_bounce[i]);
+	kfree(fep->tx_bounce);
 }
 
 static int fec_enet_alloc_buffers(struct net_device *ndev)
@@ -1158,14 +1159,16 @@ static int fec_enet_alloc_buffers(struct net_device *ndev)
 	bdp--;
 	bdp->cbd_sc |= BD_SC_WRAP;
 
+	fep->tx_bounce = kmalloc((FEC_ENET_TX_SPACE * TX_RING_SIZE) + 64,
+				GFP_KERNEL);
+	if (!fep->tx_bounce) {
+		fec_enet_free_buffers(ndev);
+		return -ENOMEM;
+	}
+	fep->tx_aligned_bounce = PTR_ALIGN(fep->tx_bounce, 64);
+
 	bdp = fep->tx_bd_base;
 	for (i = 0; i < TX_RING_SIZE; i++) {
-		fep->tx_bounce[i] = kmalloc(FEC_ENET_TX_FRSIZE, GFP_KERNEL);
-		if (!fep->tx_bounce[i]) {
-			fec_enet_free_buffers(ndev);
-			return -ENOMEM;
-		}
-
 		bdp->cbd_sc = 0;
 		bdp->cbd_bufaddr = 0;
 #ifdef CONFIG_ENHANCED_BD
