@@ -57,7 +57,9 @@
 #include "fec.h"
 #include "fec_1588.h"
 
-#if defined(CONFIG_ARCH_MXC) || defined(CONFIG_SOC_IMX28)
+#ifdef CONFIG_ARCH_MX6
+#define FEC_TX_ALIGNMENT	8
+#elif defined(CONFIG_ARCH_MXC) || defined(CONFIG_SOC_IMX28)
 #define FEC_TX_ALIGNMENT	16
 #else
 #define FEC_TX_ALIGNMENT	4
