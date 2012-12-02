@@ -1450,6 +1450,7 @@ fec_restart(struct net_device *dev, int duplex)
 	const struct platform_device_id *id_entry =
 				platform_get_device_id(fep->pdev);
 	int i, ret;
+	u32 rcr;
 	u32 imask, temp_mac[2], enctrl = 0;
 
 	/* Whack a reset.  We should wait for this. */
@@ -1530,15 +1531,14 @@ fec_restart(struct net_device *dev, int duplex)
 	bdp--;
 	bdp->cbd_sc |= BD_SC_WRAP;
 
+	rcr = OPT_FRAME_SIZE | 0x04;
 	/* Enable MII mode */
 	if (duplex) {
 		/* MII enable / FD enable */
-		writel(OPT_FRAME_SIZE | 0x04, fep->hwp + FEC_R_CNTRL);
 		writel(0x04, fep->hwp + FEC_X_CNTRL);
 	} else {
-		/* MII enable / No Rcv on Xmit */
-		writel(OPT_FRAME_SIZE | 0x06, fep->hwp + FEC_R_CNTRL);
-		writel(0x0, fep->hwp + FEC_X_CNTRL);
+		rcr |= 2;				/* No Rcv on Xmit */
+		writel(0x0, fep->hwp + FEC_X_CNTRL);	/* MII enable */
 	}
 #ifdef FEC_FTRL
 	writel(PKT_MAXBUF_SIZE, fep->hwp + FEC_FTRL);
@@ -1556,20 +1556,14 @@ fec_restart(struct net_device *dev, int duplex)
 	 * differently on enet-mac.
 	 */
 	if (id_entry->driver_data & FEC_QUIRK_ENET_MAC) {
-		u32 rcr = readl(fep->hwp + FEC_R_CNTRL);
-
 		/* MII or RMII */
 		if (fep->phy_interface == PHY_INTERFACE_MODE_RGMII)
 			rcr |= (1 << 6);
 		else if (fep->phy_interface == PHY_INTERFACE_MODE_RMII)
 			rcr |= (1 << 8);
-		else
-			rcr &= ~(1 << 8);
 
 		/* 10M or 100M */
-		if (fep->phy_dev && fep->phy_dev->speed == SPEED_100)
-			rcr &= ~(1 << 9);
-		else
+		if (!(fep->phy_dev && fep->phy_dev->speed == SPEED_100))
 			rcr |= (1 << 9);
 
 		/* Enable pause frame
@@ -1581,9 +1575,8 @@ fec_restart(struct net_device *dev, int duplex)
 			(cpu_is_mx6dl() &&
 			(mx6dl_revision() >= IMX_CHIP_REVISION_1_1)))
 			rcr |= FEC_ENET_FCE;
-
-		writel(rcr, fep->hwp + FEC_R_CNTRL);
 	}
+	writel(rcr, fep->hwp + FEC_R_CNTRL);
 
 	if (fep->ptimer_present) {
 		/* Set Timer count */
