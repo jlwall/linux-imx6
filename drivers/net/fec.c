@@ -73,6 +73,9 @@
 /* Controller needs driver to swap frame */
 #define FEC_QUIRK_SWAP_FRAME		(1 << 1)
 
+static int rx_pause_level;
+module_param(rx_pause_level, int, S_IRUGO | S_IWUSR);
+
 static struct platform_device_id fec_devtype[] = {
 	{
 		.name = "enet",
@@ -151,6 +154,7 @@ MODULE_PARM_DESC(macaddr, "FEC Ethernet MAC address");
 #define PKT_MAXBLR_SIZE		1520
 
 /* Pause frame feild and FIFO threshold */
+#define TCR_TFC_PAUSE		0x0008
 #define FEC_ENET_FCE		(1 << 5)
 #define FEC_ENET_RSEM_V		0x84
 #define FEC_ENET_RSFL_V		16
@@ -576,6 +580,11 @@ static int fec_enet_rx(struct net_device *ndev)
 			break;
 #endif
 		packet_cnt++;
+		if ((packet_cnt >= rx_pause_level)
+				&& (fep->phy_dev->supported & SUPPORTED_Pause)
+				&& (((packet_cnt - rx_pause_level) & 0x7) == 0))
+			writel(fep->full_duplex ? 4 | TCR_TFC_PAUSE
+				: TCR_TFC_PAUSE, fep->hwp + FEC_X_CNTRL);
 
 		/* Check for errors. */
 		status ^= BD_ENET_RX_LAST;
@@ -1799,6 +1808,8 @@ fec_probe(struct platform_device *pdev)
 
 	fep->hwp = ioremap(r->start, resource_size(r));
 	fep->pdev = pdev;
+	if (!rx_pause_level)
+		rx_pause_level = RX_RING_SIZE / 2;
 
 	if (!fep->hwp) {
 		ret = -ENOMEM;
