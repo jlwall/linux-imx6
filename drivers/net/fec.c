@@ -768,6 +768,10 @@ fec_enet_interrupt(int irq, void *dev_id)
 			ret = IRQ_HANDLED;
 			complete(&fep->mdio_done);
 		}
+
+		if (int_events & FEC_ENET_EBERR) {
+			WARN_ONCE(1, "bus error\n");
+		}
 	}
 
 	return ret;
@@ -1653,7 +1657,7 @@ fec_restart(struct net_device *dev, int duplex)
 
 	/* Enable interrupts we wish to service */
 	if (cpu_is_mx6q() || cpu_is_mx6dl() || cpu_is_mx2() || cpu_is_mx3())
-		imask = (FEC_1588_IMASK | FEC_DEFAULT_IMASK);
+		imask = FEC_DEFAULT_IMASK | FEC_1588_IMASK | FEC_ENET_EBERR;
 	else
 		imask = FEC_DEFAULT_IMASK;
 	writel(imask, fep->hwp + FEC_IMASK);
