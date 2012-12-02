@@ -630,14 +630,44 @@ static int fec_enet_rx(struct net_device *ndev)
 			dma_unmap_single(&fep->pdev->dev, bdp->cbd_bufaddr,
 					pkt_len, DMA_FROM_DEVICE);
 
+		pkt_len -= RX_SHIFT_PAD;
 		if (id_entry->driver_data & FEC_QUIRK_SWAP_FRAME)
-			swap_buffer(rx_skb->data, pkt_len);
+			swap_buffer(rx_skb->data + RX_SHIFT_PAD, pkt_len);
 
 		/* This does 16 byte alignment, exactly what we need.
 		 * The packet length includes FCS, but we don't want to
 		 * include that when passing upstream as it messes up
 		 * bridging applications.
 		 */
+#if RX_SHIFT_PAD==NET_IP_ALIGN
+		skb = dev_alloc_skb(FEC_ENET_RX_FRSIZE + RX_SHIFT_PAD + 64);
+		if (unlikely(!skb)) {
+			dev_err(&ndev->dev,
+					"Memory squeeze, dropping packet.\n");
+			ndev->stats.rx_dropped++;
+			skb = fep->rx_skbuff[cur_rx];
+		} else {
+			uint skip = (-((uint)skb->data)) & 0x3f;
+
+			skb_reserve(skb, skip);
+			fep->rx_skbuff[cur_rx] = skb;
+
+			skb_reserve(rx_skb, NET_IP_ALIGN);
+			skb_put(rx_skb, pkt_len - 4);
+			/* 1588 message TS handle */
+			if (fep->ptimer_present)
+				fec_ptp_store_rxstamp(fpp, rx_skb, bdp);
+			rx_skb->protocol = eth_type_trans(rx_skb, ndev);
+#ifdef CONFIG_FEC_NAPI
+			netif_receive_skb(rx_skb);
+#else
+			netif_rx(rx_skb);
+#endif
+		}
+
+		bdp->cbd_bufaddr = dma_map_single(&fep->pdev->dev, skb->data,
+			FEC_ENET_RX_FRSIZE + RX_SHIFT_PAD, DMA_FROM_DEVICE);
+#else
 		skb = dev_alloc_skb(pkt_len - 4 + NET_IP_ALIGN);
 
 		if (unlikely(!skb)) {
@@ -647,8 +677,9 @@ static int fec_enet_rx(struct net_device *ndev)
 		} else {
 			skb_reserve(skb, NET_IP_ALIGN);
 			skb_put(skb, pkt_len - 4);	/* Make room */
-			skb_copy_to_linear_data(skb, rx_skb->data, pkt_len - 4);
-			/* 1588 messeage TS handle */
+			skb_copy_to_linear_data(skb, rx_skb->data
+					+ RX_SHIFT_PAD, pkt_len - 4);
+			/* 1588 message TS handle */
 			if (fep->ptimer_present)
 				fec_ptp_store_rxstamp(fpp, skb, bdp);
 			skb->protocol = eth_type_trans(skb, ndev);
@@ -660,7 +691,9 @@ static int fec_enet_rx(struct net_device *ndev)
 		}
 
 		bdp->cbd_bufaddr = dma_map_single(&fep->pdev->dev, rx_skb->data,
-				FEC_ENET_RX_FRSIZE, DMA_FROM_DEVICE);
+			FEC_ENET_RX_FRSIZE + RX_SHIFT_PAD, DMA_FROM_DEVICE);
+#endif
+
 rx_processing_done:
 #ifdef CONFIG_ENHANCED_BD
 		bdp->cbd_esc = BD_ENET_RX_INT;
@@ -1174,7 +1207,8 @@ static void fec_enet_free_buffers(struct net_device *ndev)
 
 		if (bdp->cbd_bufaddr)
 			dma_unmap_single(&fep->pdev->dev, bdp->cbd_bufaddr,
-					FEC_ENET_RX_FRSIZE, DMA_FROM_DEVICE);
+					FEC_ENET_RX_FRSIZE + RX_SHIFT_PAD,
+					DMA_FROM_DEVICE);
 		if (skb)
 			dev_kfree_skb(skb);
 		bdp++;
@@ -1193,15 +1227,19 @@ static int fec_enet_alloc_buffers(struct net_device *ndev)
 
 	bdp = fep->rx_bd_base;
 	for (i = 0; i < RX_RING_SIZE; i++) {
-		skb = dev_alloc_skb(FEC_ENET_RX_FRSIZE);
+		uint skip;
+		skb = dev_alloc_skb(FEC_ENET_RX_FRSIZE + NET_IP_ALIGN + 64);
 		if (!skb) {
 			fec_enet_free_buffers(ndev);
 			return -ENOMEM;
 		}
 		fep->rx_skbuff[i] = skb;
+		skip = (-((uint)skb->data)) & 0x3f;
+		skb_reserve(skb, skip);
 
 		bdp->cbd_bufaddr = dma_map_single(&fep->pdev->dev, skb->data,
-				FEC_ENET_RX_FRSIZE, DMA_FROM_DEVICE);
+				FEC_ENET_RX_FRSIZE + RX_SHIFT_PAD,
+				DMA_FROM_DEVICE);
 		bdp->cbd_sc = BD_ENET_RX_EMPTY;
 #ifdef CONFIG_ENHANCED_BD
 		bdp->cbd_esc = BD_ENET_RX_INT;
@@ -1509,7 +1547,8 @@ fec_restart(struct net_device *dev, int duplex)
 
 		if (skb) {
 			bdp->cbd_bufaddr = dma_map_single(&fep->pdev->dev,
-				skb->data, FEC_ENET_RX_FRSIZE, DMA_FROM_DEVICE);
+				skb->data, FEC_ENET_RX_FRSIZE
+				+ RX_SHIFT_PAD, DMA_FROM_DEVICE);
 			bdp->cbd_sc = BD_ENET_RX_EMPTY;
 		} else {
 			bdp->cbd_bufaddr = 0;
@@ -1564,6 +1603,9 @@ fec_restart(struct net_device *dev, int duplex)
 	}
 #ifdef FEC_FTRL
 	writel(PKT_MAXBUF_SIZE, fep->hwp + FEC_FTRL);
+#endif
+#ifdef RACC_SHIFT16
+	writel(RACC_SHIFT16, fep->hwp + FEC_RACC);
 #endif
 #if defined(CONFIG_FEC_DEBUG) && defined(FEC_MIB_CTRLSTAT)
 	writel(0, fep->hwp + FEC_MIB_CTRLSTAT);

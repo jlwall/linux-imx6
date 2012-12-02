@@ -50,6 +50,7 @@
 #define FEC_R_FIFO_RAEM		0x198 /* Receive FIFO almost empty threshold */
 #define FEC_R_FIFO_RAFL		0x19c /* Receive FIFO almost full threshold */
 #define FEC_FTRL		0x1b0 /* Frame truncation receive length*/
+#define FEC_RACC		0x1c4 /* Receive Accelerator function config */
 #define FEC_MIIGSK_CFGR		0x300 /* MIIGSK Configuration reg */
 #define FEC_MIIGSK_ENR		0x308 /* MIIGSK Enable reg */
 
@@ -63,6 +64,11 @@
 #define FEC_ATIME_INC		0x414
 #define FEC_TS_TIMESTAMP	0x418
 #endif
+
+#if NET_IP_ALIGN==2
+#define RACC_SHIFT16		0x80	/* Comment out to disable shift*/
+#endif
+
 #else
 
 #define FEC_ECNTRL		0x000 /* Ethernet control reg */
@@ -91,6 +97,11 @@
 
 #endif /* CONFIG_M5272 */
 
+#ifdef RACC_SHIFT16
+#define RX_SHIFT_PAD	2
+#else
+#define RX_SHIFT_PAD	0
+#endif
 
 #if (defined(CONFIG_SOC_IMX28) || defined(CONFIG_ARCH_MX6)) \
 				&& defined(CONFIG_FEC_1588)
