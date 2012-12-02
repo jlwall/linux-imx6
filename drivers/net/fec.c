@@ -504,9 +504,15 @@ static int fec_enet_tx(struct net_device *ndev)
 static void fec_timeout(struct net_device *ndev)
 {
 	struct fec_enet_private *fep = netdev_priv(ndev);
+	struct bufdesc *bdp = fep->tx_bd_base + fep->tx_remove;
+	unsigned short status;
 
 	ndev->stats.tx_errors++;
 
+	status = bdp->cbd_sc;
+	dev_err(&ndev->dev, "%s tx_full=%d tx_insert=%x tx_remove=%x "
+		"%x\n", __func__, fep->tx_full, fep->tx_insert,
+			fep->tx_remove, status);
 	dev_err(&ndev->dev, "%x %x, %x\n", readl(fep->hwp + FEC_IEVENT),
 			readl(fep->hwp + FEC_IMASK), fep->prev_ievent);
 
