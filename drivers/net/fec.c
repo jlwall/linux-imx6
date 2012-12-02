@@ -58,9 +58,9 @@
 #include "fec_1588.h"
 
 #if defined(CONFIG_ARCH_MXC) || defined(CONFIG_SOC_IMX28)
-#define FEC_ALIGNMENT	0xf
+#define FEC_TX_ALIGNMENT	16
 #else
-#define FEC_ALIGNMENT	0x3
+#define FEC_TX_ALIGNMENT	4
 #endif
 
 #define DRIVER_NAME	"fec"
@@ -305,9 +305,9 @@ fec_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	 * 4-byte boundaries. Use bounce buffers to copy data
 	 * and get it aligned. Ugh.
 	 */
-	if (((unsigned long) bufaddr) & FEC_ALIGNMENT) {
+	if (((unsigned long) bufaddr) & (FEC_TX_ALIGNMENT - 1)) {
 		bufaddr = PTR_ALIGN(fep->tx_bounce[fep->tx_insert],
-				FEC_ALIGNMENT + 1);
+				FEC_TX_ALIGNMENT);
 		memcpy(bufaddr, (void *)skb->data, skb->len);
 	}
 
