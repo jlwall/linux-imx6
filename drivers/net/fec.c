@@ -1689,7 +1689,7 @@ fec_stop(struct net_device *dev)
 
 	if (cpu_is_mx6q() || cpu_is_mx6dl())
 		/* FIXME: we have to enable enet to keep mii interrupt works. */
-		writel(2, fep->hwp + FEC_ECNTRL);
+		writel(0x102, fep->hwp + FEC_ECNTRL);
 
 	writel(fep->phy_speed, fep->hwp + FEC_MII_SPEED);
 	if (fep->ptimer_present)
