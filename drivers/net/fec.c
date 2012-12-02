@@ -1450,7 +1450,7 @@ fec_restart(struct net_device *dev, int duplex)
 	const struct platform_device_id *id_entry =
 				platform_get_device_id(fep->pdev);
 	int i, ret;
-	u32 val, temp_mac[2], reg = 0;
+	u32 imask, temp_mac[2], enctrl = 0;
 
 	/* Whack a reset.  We should wait for this. */
 	writel(1, fep->hwp + FEC_ECNTRL);
@@ -1556,21 +1556,21 @@ fec_restart(struct net_device *dev, int duplex)
 	 * differently on enet-mac.
 	 */
 	if (id_entry->driver_data & FEC_QUIRK_ENET_MAC) {
-		val = readl(fep->hwp + FEC_R_CNTRL);
+		u32 rcr = readl(fep->hwp + FEC_R_CNTRL);
 
 		/* MII or RMII */
 		if (fep->phy_interface == PHY_INTERFACE_MODE_RGMII)
-			val |= (1 << 6);
+			rcr |= (1 << 6);
 		else if (fep->phy_interface == PHY_INTERFACE_MODE_RMII)
-			val |= (1 << 8);
+			rcr |= (1 << 8);
 		else
-			val &= ~(1 << 8);
+			rcr &= ~(1 << 8);
 
 		/* 10M or 100M */
 		if (fep->phy_dev && fep->phy_dev->speed == SPEED_100)
-			val &= ~(1 << 9);
+			rcr &= ~(1 << 9);
 		else
-			val |= (1 << 9);
+			rcr |= (1 << 9);
 
 		/* Enable pause frame
 		 * ENET pause frame has two issues as ticket TKT116501
@@ -1580,25 +1580,21 @@ fec_restart(struct net_device *dev, int duplex)
 			(mx6q_revision() >= IMX_CHIP_REVISION_1_2)) ||
 			(cpu_is_mx6dl() &&
 			(mx6dl_revision() >= IMX_CHIP_REVISION_1_1)))
-			val |= FEC_ENET_FCE;
+			rcr |= FEC_ENET_FCE;
 
-		writel(val, fep->hwp + FEC_R_CNTRL);
+		writel(rcr, fep->hwp + FEC_R_CNTRL);
 	}
 
 	if (fep->ptimer_present) {
 		/* Set Timer count */
 		ret = fec_ptp_start(fep->ptp_priv);
-		if (ret) {
+		if (ret)
 			fep->ptimer_present = 0;
-			reg = 0x0;
-		} else
 #if defined(CONFIG_SOC_IMX28) || defined(CONFIG_ARCH_MX6)
-			reg = 0x00000010;
-#else
-			reg = 0x0;
+		else
+			enctrl = 0x00000010;
 #endif
-	} else
-		reg = 0x0;
+	}
 
 	if (cpu_is_mx25() || cpu_is_mx53() || cpu_is_mx6sl()) {
 		if (fep->phy_interface == PHY_INTERFACE_MODE_RMII) {
@@ -1626,14 +1622,14 @@ fec_restart(struct net_device *dev, int duplex)
 	}
 
 	/* ENET enable */
-	val = reg | (0x1 << 1);
+	enctrl |= 2;
 
 	/* if phy work at 1G mode, set ENET RGMII speed to 1G */
 	if (fep->phy_dev && (fep->phy_dev->supported &
 		(SUPPORTED_1000baseT_Half | SUPPORTED_1000baseT_Full)) &&
 		fep->phy_interface == PHY_INTERFACE_MODE_RGMII &&
 		fep->phy_dev->speed == SPEED_1000)
-		val |= (0x1 << 5);
+		enctrl |= (0x1 << 5);
 
 	/* RX FIFO threshold setting for ENET pause frame feature
 	 * Only set the parameters after ticket TKT116501 fixed.
@@ -1654,20 +1650,20 @@ fec_restart(struct net_device *dev, int duplex)
 
 	if (cpu_is_mx6q() || cpu_is_mx6dl()) {
 		/* enable endian swap */
-		val |= (0x1 << 8);
+		enctrl |= (0x1 << 8);
 		/* enable ENET store and forward mode */
 		writel(0x1 << 8, fep->hwp + FEC_X_WMRK);
 	}
-	writel(val, fep->hwp + FEC_ECNTRL);
+	writel(enctrl, fep->hwp + FEC_ECNTRL);
 
 	writel(0, fep->hwp + FEC_R_DES_ACTIVE);
 
 	/* Enable interrupts we wish to service */
 	if (cpu_is_mx6q() || cpu_is_mx6dl() || cpu_is_mx2() || cpu_is_mx3())
-		val = (FEC_1588_IMASK | FEC_DEFAULT_IMASK);
+		imask = (FEC_1588_IMASK | FEC_DEFAULT_IMASK);
 	else
-		val = FEC_DEFAULT_IMASK;
-	writel(val, fep->hwp + FEC_IMASK);
+		imask = FEC_DEFAULT_IMASK;
+	writel(imask, fep->hwp + FEC_IMASK);
 }
 
 static void
