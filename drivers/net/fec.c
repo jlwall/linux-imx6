@@ -453,9 +453,6 @@ static int fec_enet_tx(struct net_device *ndev)
 			ndev->stats.tx_packets++;
 		}
 
-		if (status & BD_ENET_TX_READY)
-			printk("HEY! Enet xmit interrupt and TX_READY.\n");
-
 		/* Deferred means some collisions occurred during transmit,
 		 * but we eventually sent the packet OK.
 		 */
