@@ -313,7 +313,7 @@ fec_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 
 	/* Set buffer length and buffer pointer */
 	bufaddr = skb->data;
-	bdp->cbd_datlen = len = skb->len;
+	bdp->cbd_datlen = len = skb->len + TX_SHIFT_PAD;
 
 	tx_offset = ((unsigned long)bufaddr) & (FEC_TX_ALIGNMENT - 1);
 #ifdef CONFIG_FEC_DEBUG
@@ -324,10 +324,12 @@ fec_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	 * 4-byte boundaries. Use bounce buffers to copy data
 	 * and get it aligned. Ugh.
 	 */
-	if (tx_offset) {
+	if (tx_offset != TX_SHIFT_PAD) {
 		bufaddr = fep->tx_aligned_bounce + (fep->tx_insert
 				* FEC_ENET_TX_SPACE);
-		memcpy(bufaddr, (void *)skb->data, len);
+		memcpy(bufaddr, skb->data - TX_SHIFT_PAD, len);
+	} else {
+		bufaddr -= TX_SHIFT_PAD;
 	}
 
 	/*
@@ -353,7 +355,7 @@ fec_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	 * swap every frame going to and coming from the controller.
 	 */
 	if (id_entry->driver_data & FEC_QUIRK_SWAP_FRAME)
-		swap_buffer(bufaddr, skb->len);
+		swap_buffer(bufaddr + TX_SHIFT_PAD, skb->len);
 
 	ndev->stats.tx_bytes += skb->len;
 
@@ -1606,6 +1608,9 @@ fec_restart(struct net_device *dev, int duplex)
 #endif
 #ifdef RACC_SHIFT16
 	writel(RACC_SHIFT16, fep->hwp + FEC_RACC);
+#endif
+#ifdef TACC_SHIFT16
+	writel(TACC_SHIFT16, fep->hwp + FEC_TACC);
 #endif
 #if defined(CONFIG_FEC_DEBUG) && defined(FEC_MIB_CTRLSTAT)
 	writel(0, fep->hwp + FEC_MIB_CTRLSTAT);

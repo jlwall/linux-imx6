@@ -50,6 +50,7 @@
 #define FEC_R_FIFO_RAEM		0x198 /* Receive FIFO almost empty threshold */
 #define FEC_R_FIFO_RAFL		0x19c /* Receive FIFO almost full threshold */
 #define FEC_FTRL		0x1b0 /* Frame truncation receive length*/
+#define FEC_TACC		0x1c0 /* Transmit Accelerator function config */
 #define FEC_RACC		0x1c4 /* Receive Accelerator function config */
 #define FEC_MIIGSK_CFGR		0x300 /* MIIGSK Configuration reg */
 #define FEC_MIIGSK_ENR		0x308 /* MIIGSK Enable reg */
@@ -67,6 +68,7 @@
 
 #if NET_IP_ALIGN==2
 #define RACC_SHIFT16		0x80	/* Comment out to disable shift*/
+#define TACC_SHIFT16		0x01	/* Comment out to disable shift*/
 #endif
 
 #else
@@ -101,6 +103,12 @@
 #define RX_SHIFT_PAD	2
 #else
 #define RX_SHIFT_PAD	0
+#endif
+
+#ifdef TACC_SHIFT16
+#define TX_SHIFT_PAD	2
+#else
+#define TX_SHIFT_PAD	0
 #endif
 
 #if (defined(CONFIG_SOC_IMX28) || defined(CONFIG_ARCH_MX6)) \
