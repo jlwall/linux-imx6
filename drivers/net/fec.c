@@ -213,8 +213,6 @@ struct fec_enet_private {
 
 	struct	platform_device *pdev;
 
-	int	opened;
-
 	/* Phylib and MDIO interface */
 	struct	mii_bus *mii_bus;
 	struct	phy_device *phy_dev;
@@ -548,7 +546,9 @@ static int fec_enet_rx(struct net_device *ndev)
 	bdp = fep->rx_bd_base + cur_rx;
 
 	while (!((status = bdp->cbd_sc) & BD_ENET_RX_EMPTY)) {
-		if (!fep->opened)
+		struct	sk_buff	*rx_skb = fep->rx_skbuff[cur_rx];
+
+		if (!rx_skb)
 			break;
 #ifdef CONFIG_FEC_NAPI
 		if (packet_cnt >= budget)
@@ -1218,7 +1218,6 @@ fec_enet_open(struct net_device *ndev)
 
 	phy_start(fep->phy_dev);
 	netif_start_queue(ndev);
-	fep->opened = 1;
 
 	ret = -EINVAL;
 	if (pdata->init && pdata->init(fep->phy_dev))
@@ -1233,7 +1232,6 @@ fec_enet_close(struct net_device *ndev)
 	struct fec_enet_private *fep = netdev_priv(ndev);
 
 	/* Don't know what to do yet. */
-	fep->opened = 0;
 	netif_stop_queue(ndev);
 	netif_carrier_off(ndev);
 #ifdef CONFIG_FEC_NAPI
