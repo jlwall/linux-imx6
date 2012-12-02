@@ -527,7 +527,6 @@ static int fec_enet_rx(struct net_device *ndev)
 	unsigned short status;
 	struct	sk_buff	*skb;
 	ushort	pkt_len;
-	__u8 *data;
 	uint cur_rx;
 	int packet_cnt = 0;
 
@@ -591,14 +590,13 @@ static int fec_enet_rx(struct net_device *ndev)
 		ndev->stats.rx_packets++;
 		pkt_len = bdp->cbd_datlen;
 		ndev->stats.rx_bytes += pkt_len;
-		data = (__u8 *)__va(bdp->cbd_bufaddr);
 
 		if (bdp->cbd_bufaddr)
 			dma_unmap_single(&fep->pdev->dev, bdp->cbd_bufaddr,
 				FEC_ENET_RX_FRSIZE, DMA_FROM_DEVICE);
 
 		if (id_entry->driver_data & FEC_QUIRK_SWAP_FRAME)
-			swap_buffer(data, pkt_len);
+			swap_buffer(rx_skb->data, pkt_len);
 
 		/* This does 16 byte alignment, exactly what we need.
 		 * The packet length includes FCS, but we don't want to
@@ -614,7 +612,7 @@ static int fec_enet_rx(struct net_device *ndev)
 		} else {
 			skb_reserve(skb, NET_IP_ALIGN);
 			skb_put(skb, pkt_len - 4);	/* Make room */
-			skb_copy_to_linear_data(skb, data, pkt_len - 4);
+			skb_copy_to_linear_data(skb, rx_skb->data, pkt_len - 4);
 			/* 1588 messeage TS handle */
 			if (fep->ptimer_present)
 				fec_ptp_store_rxstamp(fpp, skb, bdp);
@@ -626,7 +624,7 @@ static int fec_enet_rx(struct net_device *ndev)
 #endif
 		}
 
-		bdp->cbd_bufaddr = dma_map_single(&fep->pdev->dev, data,
+		bdp->cbd_bufaddr = dma_map_single(&fep->pdev->dev, rx_skb->data,
 				FEC_ENET_RX_FRSIZE, DMA_FROM_DEVICE);
 rx_processing_done:
 #ifdef CONFIG_ENHANCED_BD
