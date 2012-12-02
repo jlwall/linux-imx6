@@ -46,6 +46,7 @@
 #include <linux/platform_device.h>
 #include <linux/phy.h>
 #include <linux/fec.h>
+#include <linux/debugfs.h>
 
 #include <asm/cacheflush.h>
 
@@ -226,6 +227,19 @@ struct fec_enet_private {
 	struct napi_struct napi;
 #endif
 	u32	prev_ievent;
+#ifdef CONFIG_DEBUG_FS
+#define CONFIG_FEC_DEBUG
+#endif
+#ifdef CONFIG_FEC_DEBUG
+	struct dentry *dbgfs_root;
+	struct dentry *dbgfs_state;
+	uint	rx_overrun;
+	uint	rx_overrun_status;
+	uint	max_rx_packet_cnt;
+	uint	max_tx_packet_cnt;
+	uint	rx_pkt_count;
+	uint	tx_offset_cnt[FEC_TX_ALIGNMENT];
+#endif
 };
 
 static irqreturn_t fec_enet_interrupt(int irq, void * dev_id);
@@ -269,6 +283,7 @@ fec_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	unsigned short	status;
 	unsigned long   estatus;
 	unsigned long flags;
+	uint tx_offset;
 
 	spin_lock_irqsave(&fep->hw_lock, flags);
 	if (!fep->link) {
@@ -295,12 +310,16 @@ fec_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	bufaddr = skb->data;
 	bdp->cbd_datlen = skb->len;
 
+	tx_offset = ((unsigned long)bufaddr) & (FEC_TX_ALIGNMENT - 1);
+#ifdef CONFIG_FEC_DEBUG
+	fep->tx_offset_cnt[tx_offset]++;
+#endif
 	/*
 	 * On some FEC implementations data must be aligned on
 	 * 4-byte boundaries. Use bounce buffers to copy data
 	 * and get it aligned. Ugh.
 	 */
-	if (((unsigned long) bufaddr) & (FEC_TX_ALIGNMENT - 1)) {
+	if (tx_offset) {
 		bufaddr = fep->tx_aligned_bounce + (fep->tx_insert
 				* FEC_ENET_TX_SPACE);
 		memcpy(bufaddr, (void *)skb->data, skb->len);
@@ -475,6 +494,10 @@ static int fec_enet_tx(struct net_device *ndev)
 			if (netif_queue_stopped(ndev))
 				netif_wake_queue(ndev);
 		}
+#ifdef CONFIG_FEC_DEBUG
+		if (fep->max_tx_packet_cnt < packet_cnt)
+			fep->max_tx_packet_cnt = packet_cnt;
+#endif
 	}
 	spin_unlock_irqrestore(&fep->hw_lock, flags);
 	return packet_cnt;
@@ -560,6 +583,10 @@ static int fec_enet_rx(struct net_device *ndev)
 			if (status & BD_ENET_RX_OV) {
 				/* FIFO overrun */
 				ndev->stats.rx_fifo_errors++;
+#ifdef CONFIG_FEC_DEBUG
+				fep->rx_overrun_status = status;
+				fep->rx_overrun++;
+#endif
 			} else {
 				if (status & (BD_ENET_RX_LG | BD_ENET_RX_SH
 						| BD_ENET_RX_LAST)) {
@@ -627,6 +654,9 @@ rx_processing_done:
 		bdp->cbd_prot = 0;
 		bdp->cbd_bdu = 0;
 #endif
+#ifdef CONFIG_FEC_DEBUG
+		fep->rx_pkt_count++;
+#endif
 
 		mb();
 		/* Update BD pointer to next entry */
@@ -645,7 +675,13 @@ rx_processing_done:
 		 */
 		writel(0, fep->hwp + FEC_R_DES_ACTIVE);
 	}
-	fep->cur_rx = cur_rx;
+	if (packet_cnt) {
+		fep->cur_rx = cur_rx;
+#ifdef CONFIG_FEC_DEBUG
+		if (fep->max_rx_packet_cnt < packet_cnt)
+			fep->max_rx_packet_cnt = packet_cnt;
+#endif
+	}
 #ifdef CONFIG_FEC_NAPI
 	if (packet_cnt < budget) {
 		napi_complete(napi);
@@ -1509,6 +1545,9 @@ fec_restart(struct net_device *dev, int duplex)
 #ifdef FEC_FTRL
 	writel(PKT_MAXBUF_SIZE, fep->hwp + FEC_FTRL);
 #endif
+#if defined(CONFIG_FEC_DEBUG) && defined(FEC_MIB_CTRLSTAT)
+	writel(0, fep->hwp + FEC_MIB_CTRLSTAT);
+#endif
 	fep->full_duplex = duplex;
 
 	/* Set MII speed */
@@ -1662,6 +1701,59 @@ fec_stop(struct net_device *dev)
 	fep->link = 0;
 }
 
+#ifdef CONFIG_FEC_DEBUG
+static int dbgfs_state_open(struct inode *inode, struct file *file)
+{
+	file->private_data = inode->i_private;
+	return 0;
+}
+
+static ssize_t dbgfs_state_read(struct file *file, char __user *user_buf,
+		size_t count, loff_t *ppos)
+{
+	struct fec_enet_private *fep = file->private_data;
+	int len = 0 ;
+
+	if (fep) {
+		uint i, j, k, l;
+		uint t[FEC_TX_ALIGNMENT];
+		uint *p = t;
+		char buf[256];
+		int cnt = sizeof(buf);
+
+		i = fep->rx_overrun;
+		j = fep->max_rx_packet_cnt;
+		k = fep->max_tx_packet_cnt;
+		l = fep->rx_pkt_count;
+		memcpy(t, fep->tx_offset_cnt, sizeof(t));
+		fep->rx_overrun = 0;
+		fep->max_rx_packet_cnt = 0;
+		fep->max_tx_packet_cnt = 0;
+		fep->rx_pkt_count = 0;
+		memset(fep->tx_offset_cnt, 0, sizeof(fep->tx_offset_cnt));
+		len = snprintf(buf, cnt, "%d 0x%x %d %d %d",
+				i, fep->rx_overrun_status, j, k, l);
+		for (i = 0; i < FEC_TX_ALIGNMENT; i += 4) {
+			len += snprintf(buf + len, cnt - len, "   %d %d %d %d",
+					p[0], p[1], p[2], p[3]);
+			p += 4;
+		}
+		len += snprintf(buf + len, cnt - len, "\n");
+
+		len = simple_read_from_buffer(user_buf, count, ppos, buf, len);
+	}
+	return len ;
+}
+
+static const struct file_operations dbgfs_state_fops = {
+	.open = dbgfs_state_open,
+	.read = dbgfs_state_read,
+	.owner = THIS_MODULE
+};
+#endif
+
+static struct platform_driver fec_driver;
+
 static int __devinit
 fec_probe(struct platform_device *pdev)
 {
@@ -1759,6 +1851,13 @@ fec_probe(struct platform_device *pdev)
 	if (ret)
 		goto failed_register;
 
+#ifdef CONFIG_FEC_DEBUG
+	fep->dbgfs_root = debugfs_create_dir(fec_driver.driver.name, NULL);
+	if (!IS_ERR_OR_NULL(fep->dbgfs_root))
+		fep->dbgfs_state = debugfs_create_file("state", S_IRUGO,
+			fep->dbgfs_root, fep, &dbgfs_state_fops);
+
+#endif
 	return 0;
 
 failed_register:
@@ -1793,6 +1892,10 @@ fec_drv_remove(struct platform_device *pdev)
 	struct fec_enet_private *fep = netdev_priv(ndev);
 	struct resource *r;
 
+#ifdef CONFIG_FEC_DEBUG
+	debugfs_remove(fep->dbgfs_state);
+	debugfs_remove(fep->dbgfs_root);
+#endif
 	fec_stop(ndev);
 	fec_enet_mii_remove(fep);
 	clk_disable(fep->clk);
