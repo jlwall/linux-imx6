@@ -122,8 +122,7 @@ MODULE_PARM_DESC(macaddr, "FEC Ethernet MAC address");
 #define RX_RING_SIZE		(FEC_ENET_RX_FRPPG * FEC_ENET_RX_PAGES)
 #define FEC_ENET_TX_FRSIZE	2048
 #define FEC_ENET_TX_FRPPG	(PAGE_SIZE / FEC_ENET_TX_FRSIZE)
-#define TX_RING_SIZE		128	/* Must be power of two */
-#define TX_RING_MOD_MASK	127	/*   for this to work */
+#define TX_RING_SIZE		128
 
 #define BUFDES_SIZE ((RX_RING_SIZE + TX_RING_SIZE) * sizeof(struct bufdesc))
 
@@ -289,9 +288,7 @@ fec_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	/* Fill in a Tx ring entry */
 	bdp = fep->tx_bd_base + fep->tx_insert;
 
-	status = bdp->cbd_sc;
-
-	if (status & BD_ENET_TX_READY) {
+	if (bdp->cbd_sc & BD_ENET_TX_READY) {
 		/* Ooops.  All transmit buffers are full.  Bail out.
 		 * This should not happen, since ndev->tbusy should be set.
 		 */
@@ -300,9 +297,6 @@ fec_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 		spin_unlock_irqrestore(&fep->hw_lock, flags);
 		return NETDEV_TX_BUSY;
 	}
-
-	/* Clear all of the status flags */
-	status &= ~BD_ENET_TX_STATS;
 
 	/* Set buffer length and buffer pointer */
 	bufaddr = skb->data;
@@ -319,6 +313,12 @@ fec_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 		memcpy(bufaddr, (void *)skb->data, skb->len);
 	}
 
+	/*
+	 * Tell FEC it's ready, interrupt when done,
+	 * it's the last BD of the frame, and to put the CRC on the end.
+	 */
+	status = BD_ENET_TX_READY | BD_ENET_TX_INTR
+			| BD_ENET_TX_LAST | BD_ENET_TX_TC;
 	if (fep->ptimer_present) {
 		if (fec_ptp_do_txstamp(skb)) {
 			estatus = BD_ENET_TX_TS;
@@ -338,11 +338,7 @@ fec_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	if (id_entry->driver_data & FEC_QUIRK_SWAP_FRAME)
 		swap_buffer(bufaddr, skb->len);
 
-	/* Save skb pointer */
-	fep->tx_skbuff[fep->tx_insert] = skb;
-
 	ndev->stats.tx_bytes += skb->len;
-	fep->tx_insert = (fep->tx_insert+1) & TX_RING_MOD_MASK;
 
 	/* Push the data cache so the CPM does not get stale memory
 	 * data.
@@ -350,11 +346,14 @@ fec_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	bdp->cbd_bufaddr = dma_map_single(&fep->pdev->dev, bufaddr,
 			FEC_ENET_TX_FRSIZE, DMA_TO_DEVICE);
 
-	/* Send it on its way.  Tell FEC it's ready, interrupt when done,
-	 * it's the last BD of the frame, and to put the CRC on the end.
-	 */
-	status |= (BD_ENET_TX_READY | BD_ENET_TX_INTR
-			| BD_ENET_TX_LAST | BD_ENET_TX_TC);
+	/* Save skb pointer */
+	fep->tx_skbuff[fep->tx_insert++] = skb;
+	if (fep->tx_insert >= TX_RING_SIZE) {
+		fep->tx_insert = 0;
+		status |= BD_ENET_TX_WRAP;
+	}
+
+	mb();
 	bdp->cbd_sc = status;
 
 	/* Trigger transmission start */
@@ -465,15 +464,14 @@ static int fec_enet_tx(struct net_device *ndev)
 
 		/* Free the sk buffer associated with this last transmit */
 		dev_kfree_skb_any(skb);
-		fep->tx_skbuff[fep->tx_remove] = NULL;
-		fep->tx_remove = (fep->tx_remove + 1) & TX_RING_MOD_MASK;
-
+		fep->tx_skbuff[fep->tx_remove++] = NULL;
 		/* Update pointer to next buffer descriptor to be transmitted */
-		if (status & BD_ENET_TX_WRAP)
+		if (fep->tx_remove >= TX_RING_SIZE) {
+			fep->tx_remove = 0;
 			bdp = fep->tx_bd_base;
-		else
+		} else {
 			bdp++;
-
+		}
 	}
 	if (packet_cnt) {
 		/*
