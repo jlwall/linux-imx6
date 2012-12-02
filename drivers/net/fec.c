@@ -117,7 +117,7 @@ MODULE_PARM_DESC(macaddr, "FEC Ethernet MAC address");
 #endif /* CONFIG_M5272 */
 
 #define FEC_ENET_RX_FRSIZE	1536
-#define RX_RING_SIZE		384
+#define RX_RING_SIZE		128
 #define FEC_ENET_TX_FRSIZE	1536
 #define FEC_ENET_TX_SPACE	ALIGN(FEC_ENET_TX_FRSIZE + 2, 64)
 #define TX_RING_SIZE		128
