@@ -613,7 +613,7 @@ static int fec_enet_rx(struct net_device *ndev)
 
 		if (bdp->cbd_bufaddr)
 			dma_unmap_single(&fep->pdev->dev, bdp->cbd_bufaddr,
-				FEC_ENET_RX_FRSIZE, DMA_FROM_DEVICE);
+					pkt_len, DMA_FROM_DEVICE);
 
 		if (id_entry->driver_data & FEC_QUIRK_SWAP_FRAME)
 			swap_buffer(rx_skb->data, pkt_len);
